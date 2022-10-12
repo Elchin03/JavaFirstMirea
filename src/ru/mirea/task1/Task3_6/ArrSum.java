@@ -1,8 +1,8 @@
-package ru.mirea.task1;
+package ru.mirea.task1.Task3_6;
 
 import java.util.Scanner;
 
-public class Task1 {
+public class ArrSum {
     public static void main(String[] args) {
         int circle = 1;
         while (circle == 1){
