@@ -1,8 +1,8 @@
-package ru.mirea.task1.ex1;
+package ru.mirea.task1;
 
 import java.util.Scanner;
 
-public class task1 {
+public class Task1 {
     public static void main(String[] args) {
         int circle = 1;
         while (circle == 1){
