@@ -1,8 +1,171 @@
-# Default ignored files
-/shelf/
-/workspace.xml
-# Datasource local storage ignored files
-/dataSources/
-/dataSources.local.xml
-# Editor-based HTTP Client requests
-/httpRequests/
+import java.io.*;
+import java.net.URI;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
+import java.util.*;
+import java.net.http.*;
+import java.util.stream.Collectors;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
+import java.util.zip.ZipInputStream;
+
+class PackageUnit {
+    private final String name;
+    private ArrayList<PackageUnit> dependencies;
+
+    public PackageUnit(String name) {
+        this.name = name;
+        this.dependencies = new ArrayList<>();
+    }
+
+    public void add(PackageUnit dependency) {
+        dependencies.add(dependency);
+    }
+
+    public String getName() {
+        return name;
+    }
+
+    @Override
+    public String toString() {
+        final StringBuffer sb = new StringBuffer();
+        for (var dep : dependencies) {
+            sb.append("\t").append(name).append(" -> ").append(dep.name).append("\n");
+        }
+        for (var dep : dependencies) {
+            sb.append(dep.toString());
+        }
+        return sb.toString();
+    }
+}
+
+public class Visualiser {
+    private static String getUrlToDownload(String content) {
+        var contentLines = content.split("\n");
+        String answer = "";
+        for (int i = 0; i < contentLines.length; ++i) {
+            if (contentLines[contentLines.length - 1 - i].contains("href=") && contentLines[contentLines.length - 1 - i].contains("whl")) {
+                answer = contentLines[contentLines.length - 1 - i];
+                break;
+            }
+        }
+        return answer.replace("href=", "").substring(8, 230);
+    }
+
+    private static String findMetadata(ArrayList<String> dirList) {
+        for (var file : dirList) {
+            if (file.contains("METADATA")) {
+                return file;
+            }
+        }
+        return null;
+    }
+
+    private static ArrayList<String> findAll(ArrayList<String> lines) {
+        ArrayList<String> result = new ArrayList<>();
+        for (var line : lines) {
+            if (line.contains("requires-dist") && !line.contains("python") && !line.contains("extra")) {
+                result.add(line);
+            }
+        }
+        return result;
+    }
+
+    private static ArrayList<String> getDependencies(ArrayList<String> lines, Map<String, Integer> libsAlreadyHave) {
+        ArrayList<String> dependencies = new ArrayList<>();
+        lines = findAll(lines);
+        for (var line : lines) {
+            String library = line.split(" ")[1];
+            //System.out.println(library);
+            if (!libsAlreadyHave.containsKey(library)) {
+                libsAlreadyHave.put(library, 1);
+                dependencies.add(library);
+            } else if (libsAlreadyHave.get(library) == 1) {
+                libsAlreadyHave.replace(library, 2);
+                dependencies.add(library);
+            }
+        }
+        return dependencies;
+    }
+
+    private static PackageUnit mainLoop(String packageName, Map<String, Integer> libsAlreadyHave) throws IOException {
+        String url = "https://pypi.org/simple/" + packageName + "/";
+
+        PackageUnit packageUnit = new PackageUnit(packageName);
+
+        var client = HttpClient.newHttpClient();
+        //HttpRequest request = HttpRequest.newBuilder().uri(URI.create(url)).GET().build();
+
+        HttpResponse<String> response;
+        String urlToDownload;
+        try {
+            HttpRequest request = HttpRequest.newBuilder().uri(URI.create(url)).GET().build();
+            response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            urlToDownload = getUrlToDownload(response.body());
+        } catch (IOException | InterruptedException | IllegalArgumentException | StringIndexOutOfBoundsException e) {
+            return null;
+        }
+        // System.out.println(urlToDownload);
+        InputStream in = new URL(urlToDownload).openStream();
+
+        String currentFileName = packageName + ".zip";
+        Path pathOfFile = Paths.get(currentFileName);
+        Files.copy(in, pathOfFile, StandardCopyOption.REPLACE_EXISTING);
+
+        // что-то надо сделать с этим пиздецом
+        ArrayList<String> metadataLines = new ArrayList<>();
+
+        var dir = new ZipInputStream(new FileInputStream(currentFileName));
+        ArrayList<String> allFiles = new ArrayList<>();
+        ZipEntry ze;
+        while ((ze = dir.getNextEntry()) != null) {
+            allFiles.add(ze.getName());
+        }
+        String metadataPath = findMetadata(allFiles);
+        assert metadataPath != null;
+        File metadataFile = new File(metadataPath);
+        ZipFile zipFile = new ZipFile(currentFileName);
+        Enumeration<? extends ZipEntry> entries = zipFile.entries();
+        while (entries.hasMoreElements()) {
+            ZipEntry entry = entries.nextElement();
+            if (entry.getName().equals(metadataPath)) {
+                InputStream stream = zipFile.getInputStream(entry);
+                String text = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8)).lines().collect(Collectors.joining("\n"));
+                metadataLines.add(text.toLowerCase());
+            }
+        }
+        ArrayList<String> resList = new ArrayList<>();
+        for (var line : metadataLines) {
+            resList.addAll(Arrays.asList(line.split("\n")));
+        }
+        // вот тут заканчивается максимальный пиздец, а в результате разделенные по строкам метаданные, находящиеся в ArrayList(resList).
+
+        //System.out.println(resList);
+
+        // ура получили список зависимостей!!!
+        var dependencyNames = getDependencies(resList, libsAlreadyHave);
+        System.out.println(dependencyNames);
+        // надо вынести эту шнягу, но мне лень
+
+
+        for (var dependencyName : dependencyNames) {
+            var newPackageUnit = mainLoop(dependencyName, libsAlreadyHave);
+            if (newPackageUnit != null) {
+                packageUnit.add(newPackageUnit);
+            }
+        }
+
+        Files.delete(pathOfFile);
+        return packageUnit;
+    }
+
+    public static void main(String[] args) throws IOException, InterruptedException {
+        Map<String, Integer>libsAlreadyHave = new HashMap<>();
+        var root = mainLoop("matplotlib", libsAlreadyHave);
+        System.out.println("digraph G {\n" + root + "}");
+    }
+}
